@@ -1,11 +1,13 @@
 #!/usr/bin/env sh
-#
-# deSEC.io Domain API
-#
-# Author: Zheng Qian
-#
-# deSEC API doc
-# https://desec.readthedocs.io/en/latest/
+# shellcheck disable=SC2034
+dns_desec_info='deSEC.io
+Site: desec.readthedocs.io/en/latest/
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi#dns_desec
+Options:
+ DEDYN_TOKEN API Token
+Issues: github.com/acmesh-official/acme.sh/issues/2180
+Author: Zheng Qian
+'
 
 REST_API="https://desec.io/api/v1/domains"
 
@@ -37,6 +39,7 @@ dns_desec_add() {
     _err "invalid domain"
     return 1
   fi
+  _sub_domain=$(echo "$_sub_domain" | _lower_case)
   _debug _sub_domain "$_sub_domain"
   _debug _domain "$_domain"
 
@@ -46,7 +49,7 @@ dns_desec_add() {
   _desec_rest GET "$REST_API/$_domain/rrsets/$_sub_domain/TXT/"
 
   if [ "$_code" = "200" ]; then
-    oldtxtvalues="$(echo "$response" | _egrep_o "\"records\":\\[\"\\S*\"\\]" | cut -d : -f 2 | tr -d "[]\\\\\"" | sed "s/,/ /g")"
+    oldtxtvalues="$(echo "$response" | _egrep_o "\"records\":\\[\"[^ ]*\"\\]" | cut -d : -f 2 | tr -d "[]\\\\\"" | sed "s/,/ /g")"
     _debug "existing TXT found"
     _debug oldtxtvalues "$oldtxtvalues"
     if [ -n "$oldtxtvalues" ]; then
@@ -98,7 +101,7 @@ dns_desec_rm() {
     _err "invalid domain"
     return 1
   fi
-
+  _sub_domain=$(echo "$_sub_domain" | _lower_case)
   _debug _sub_domain "$_sub_domain"
   _debug _domain "$_domain"
 
@@ -108,7 +111,7 @@ dns_desec_rm() {
   _desec_rest GET "$REST_API/$_domain/rrsets/$_sub_domain/TXT/"
 
   if [ "$_code" = "200" ]; then
-    oldtxtvalues="$(echo "$response" | _egrep_o "\"records\":\\[\"\\S*\"\\]" | cut -d : -f 2 | tr -d "[]\\\\\"" | sed "s/,/ /g")"
+    oldtxtvalues="$(echo "$response" | _egrep_o "\"records\":\\[\"[^ ]*\"\\]" | cut -d : -f 2 | tr -d "[]\\\\\"" | sed "s/,/ /g")"
     _debug "existing TXT found"
     _debug oldtxtvalues "$oldtxtvalues"
     if [ -n "$oldtxtvalues" ]; then
@@ -148,6 +151,8 @@ _desec_rest() {
   if [ "$m" != "GET" ]; then
     _secure_debug2 data "$data"
     response="$(_post "$data" "$ep" "" "$m")"
+    _info "Sleeping 1s to respect deSEC write rate limit"
+    _sleep 1
   else
     response="$(_get "$ep")"
   fi
@@ -174,7 +179,7 @@ _get_root() {
   i=2
   p=1
   while true; do
-    h=$(printf "%s" "$domain" | cut -d . -f $i-100)
+    h=$(printf "%s" "$domain" | cut -d . -f "$i"-100)
     _debug h "$h"
     if [ -z "$h" ]; then
       #not valid
@@ -186,7 +191,7 @@ _get_root() {
     fi
 
     if _contains "$response" "\"name\":\"$h\"" >/dev/null; then
-      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-$p)
+      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-"$p")
       _domain=$h
       return 0
     fi

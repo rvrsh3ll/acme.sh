@@ -1,20 +1,21 @@
 #!/usr/bin/env sh
+# shellcheck disable=SC2034
+dns_dynu_info='Dynu.com
+Site: Dynu.com
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi#dns_dynu
+Options:
+ Dynu_ClientId Client ID
+ Dynu_Secret Secret
+Issues: github.com/shar0119/acme.sh
+Author: Dynu Systems Inc
+'
 
-#Client ID
-#Dynu_ClientId="0b71cae7-a099-4f6b-8ddf-94571cdb760d"
-#
-#Secret
-#Dynu_Secret="aCUEY4BDCV45KI8CSIC3sp2LKQ9"
-#
 #Token
 Dynu_Token=""
 #
 #Endpoint
 Dynu_EndPoint="https://api.dynu.com/v2"
-#
-#Author: Dynu Systems, Inc.
-#Report Bugs here: https://github.com/shar0119/acme.sh
-#
+
 ########  Public functions #####################
 
 #Usage: add _acme-challenge.www.domain.com "XKrxpRBosdIKFzxW_CT3KLZNf6q0HG9i01zxXp5CPBs"
@@ -22,6 +23,8 @@ dns_dynu_add() {
   fulldomain=$1
   txtvalue=$2
 
+  Dynu_ClientId="${Dynu_ClientId:-$(_readaccountconf_mutable Dynu_ClientId)}"
+  Dynu_Secret="${Dynu_Secret:-$(_readaccountconf_mutable Dynu_Secret)}"
   if [ -z "$Dynu_ClientId" ] || [ -z "$Dynu_Secret" ]; then
     Dynu_ClientId=""
     Dynu_Secret=""
@@ -31,8 +34,8 @@ dns_dynu_add() {
   fi
 
   #save the client id and secret to the account conf file.
-  _saveaccountconf Dynu_ClientId "$Dynu_ClientId"
-  _saveaccountconf Dynu_Secret "$Dynu_Secret"
+  _saveaccountconf_mutable Dynu_ClientId "$Dynu_ClientId"
+  _saveaccountconf_mutable Dynu_Secret "$Dynu_Secret"
 
   if [ -z "$Dynu_Token" ]; then
     _info "Getting Dynu token."
@@ -68,6 +71,8 @@ dns_dynu_rm() {
   fulldomain=$1
   txtvalue=$2
 
+  Dynu_ClientId="${Dynu_ClientId:-$(_readaccountconf_mutable Dynu_ClientId)}"
+  Dynu_Secret="${Dynu_Secret:-$(_readaccountconf_mutable Dynu_Secret)}"
   if [ -z "$Dynu_ClientId" ] || [ -z "$Dynu_Secret" ]; then
     Dynu_ClientId=""
     Dynu_Secret=""
@@ -77,8 +82,8 @@ dns_dynu_rm() {
   fi
 
   #save the client id and secret to the account conf file.
-  _saveaccountconf Dynu_ClientId "$Dynu_ClientId"
-  _saveaccountconf Dynu_Secret "$Dynu_Secret"
+  _saveaccountconf_mutable Dynu_ClientId "$Dynu_ClientId"
+  _saveaccountconf_mutable Dynu_Secret "$Dynu_Secret"
 
   if [ -z "$Dynu_Token" ]; then
     _info "Getting Dynu token."
@@ -125,7 +130,7 @@ _get_root() {
   i=2
   p=1
   while true; do
-    h=$(printf "%s" "$domain" | cut -d . -f $i-100)
+    h=$(printf "%s" "$domain" | cut -d . -f "$i"-100)
     _debug h "$h"
     if [ -z "$h" ]; then
       #not valid
@@ -139,7 +144,7 @@ _get_root() {
     if _contains "$response" "\"domainName\":\"$h\"" >/dev/null; then
       dnsId=$(printf "%s" "$response" | tr -d "{}" | cut -d , -f 2 | cut -d : -f 2)
       _domain_name=$h
-      _node=$(printf "%s" "$domain" | cut -d . -f 1-$p)
+      _node=$(printf "%s" "$domain" | cut -d . -f 1-"$p")
       return 0
     fi
     p=$i
@@ -213,11 +218,11 @@ _dynu_authentication() {
 
   response="$(_get "$Dynu_EndPoint/oauth2/token")"
   if [ "$?" != "0" ]; then
-    _err "Authentication failed."
+    _err "Authentication failed: no response from $Dynu_EndPoint/oauth2/token"
     return 1
   fi
   if _contains "$response" "Authentication Exception"; then
-    _err "Authentication failed."
+    _err "Authentication failed. Server response: $response"
     return 1
   fi
   if _contains "$response" "access_token"; then

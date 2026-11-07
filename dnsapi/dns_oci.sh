@@ -1,6 +1,19 @@
 #!/usr/bin/env sh
-#
-# Acme.sh DNS API plugin for Oracle Cloud Infrastructure
+# shellcheck disable=SC2034
+dns_oci_info='Oracle Cloud Infrastructure (OCI)
+ If OCI CLI configuration file ~/.oci/config has a DEFAULT profile then it will be used.
+Site: Cloud.Oracle.com
+Docs: github.com/acmesh-official/acme.sh/wiki/How-to-use-Oracle-Cloud-Infrastructure-DNS
+Options:
+ OCI_CLI_TENANCY OCID of tenancy that contains the target DNS zone. Optional.
+ OCI_CLI_USER OCID of user with permission to add/remove records from zones. Optional.
+ OCI_CLI_REGION Should point to the tenancy home region. Optional.
+ OCI_CLI_KEY_FILE Path to private API signing key file in PEM format. Optional.
+ OCI_CLI_KEY The private API signing key in PEM format. Optional.
+Issues: github.com/acmesh-official/acme.sh/issues/3540
+Author: Avi Miller <me@dje.li>
+'
+
 # Copyright (c) 2021, Oracle and/or its affiliates
 #
 # The plugin will automatically use the default profile from an OCI SDK and CLI
@@ -102,12 +115,15 @@ _oci_config() {
     _clearaccountconf_mutable OCI_CLI_PROFILE
   fi
 
-  OCI_CLI_TENANCY="${OCI_CLI_TENANCY:-$(_readaccountconf_mutable OCI_CLI_TENANCY)}"
+  if [ -z "$OCI_CLI_TENANCY" ] && [ -f "$OCI_CLI_CONFIG_FILE" ]; then
+    _debug "Reading OCI_CLI_TENANCY value from: $OCI_CLI_CONFIG_FILE"
+    OCI_CLI_TENANCY=$(_readini "$OCI_CLI_CONFIG_FILE" tenancy "$OCI_CLI_PROFILE")
+  fi
+  if [ -z "$OCI_CLI_TENANCY" ]; then
+    OCI_CLI_TENANCY=$(_readaccountconf_mutable OCI_CLI_TENANCY)
+  fi
   if [ "$OCI_CLI_TENANCY" ]; then
     _saveaccountconf_mutable OCI_CLI_TENANCY "$OCI_CLI_TENANCY"
-  elif [ -f "$OCI_CLI_CONFIG_FILE" ]; then
-    _debug "Reading OCI_CLI_TENANCY value from: $OCI_CLI_CONFIG_FILE"
-    OCI_CLI_TENANCY="${OCI_CLI_TENANCY:-$(_readini "$OCI_CLI_CONFIG_FILE" tenancy "$OCI_CLI_PROFILE")}"
   fi
 
   if [ -z "$OCI_CLI_TENANCY" ]; then
@@ -115,41 +131,47 @@ _oci_config() {
     return 1
   fi
 
-  OCI_CLI_USER="${OCI_CLI_USER:-$(_readaccountconf_mutable OCI_CLI_USER)}"
+  if [ -z "$OCI_CLI_USER" ] && [ -f "$OCI_CLI_CONFIG_FILE" ]; then
+    _debug "Reading OCI_CLI_USER value from: $OCI_CLI_CONFIG_FILE"
+    OCI_CLI_USER=$(_readini "$OCI_CLI_CONFIG_FILE" user "$OCI_CLI_PROFILE")
+  fi
+  if [ -z "$OCI_CLI_USER" ]; then
+    OCI_CLI_USER=$(_readaccountconf_mutable OCI_CLI_USER)
+  fi
   if [ "$OCI_CLI_USER" ]; then
     _saveaccountconf_mutable OCI_CLI_USER "$OCI_CLI_USER"
-  elif [ -f "$OCI_CLI_CONFIG_FILE" ]; then
-    _debug "Reading OCI_CLI_USER value from: $OCI_CLI_CONFIG_FILE"
-    OCI_CLI_USER="${OCI_CLI_USER:-$(_readini "$OCI_CLI_CONFIG_FILE" user "$OCI_CLI_PROFILE")}"
   fi
   if [ -z "$OCI_CLI_USER" ]; then
     _err "Error: unable to read OCI_CLI_USER from config file or environment variable."
     return 1
   fi
 
-  OCI_CLI_REGION="${OCI_CLI_REGION:-$(_readaccountconf_mutable OCI_CLI_REGION)}"
+  if [ -z "$OCI_CLI_REGION" ] && [ -f "$OCI_CLI_CONFIG_FILE" ]; then
+    _debug "Reading OCI_CLI_REGION value from: $OCI_CLI_CONFIG_FILE"
+    OCI_CLI_REGION=$(_readini "$OCI_CLI_CONFIG_FILE" region "$OCI_CLI_PROFILE")
+  fi
+  if [ -z "$OCI_CLI_REGION" ]; then
+    OCI_CLI_REGION=$(_readaccountconf_mutable OCI_CLI_REGION)
+  fi
   if [ "$OCI_CLI_REGION" ]; then
     _saveaccountconf_mutable OCI_CLI_REGION "$OCI_CLI_REGION"
-  elif [ -f "$OCI_CLI_CONFIG_FILE" ]; then
-    _debug "Reading OCI_CLI_REGION value from: $OCI_CLI_CONFIG_FILE"
-    OCI_CLI_REGION="${OCI_CLI_REGION:-$(_readini "$OCI_CLI_CONFIG_FILE" region "$OCI_CLI_PROFILE")}"
   fi
   if [ -z "$OCI_CLI_REGION" ]; then
     _err "Error: unable to read OCI_CLI_REGION from config file or environment variable."
     return 1
   fi
 
-  OCI_CLI_KEY="${OCI_CLI_KEY:-$(_readaccountconf_mutable OCI_CLI_KEY)}"
-  if [ -z "$OCI_CLI_KEY" ]; then
-    _clearaccountconf_mutable OCI_CLI_KEY
-    OCI_CLI_KEY_FILE="${OCI_CLI_KEY_FILE:-$(_readini "$OCI_CLI_CONFIG_FILE" key_file "$OCI_CLI_PROFILE")}"
-    if [ "$OCI_CLI_KEY_FILE" ] && [ -f "$OCI_CLI_KEY_FILE" ]; then
-      _debug "Reading OCI_CLI_KEY value from: $OCI_CLI_KEY_FILE"
-      OCI_CLI_KEY=$(_base64 <"$OCI_CLI_KEY_FILE")
-      _saveaccountconf_mutable OCI_CLI_KEY "$OCI_CLI_KEY"
-    fi
-  else
+  if [ -z "$OCI_CLI_KEY_FILE" ] && [ -f "$OCI_CLI_CONFIG_FILE" ]; then
+    OCI_CLI_KEY_FILE=$(_readini "$OCI_CLI_CONFIG_FILE" key_file "$OCI_CLI_PROFILE")
+  fi
+  if [ "$OCI_CLI_KEY" ]; then
     _saveaccountconf_mutable OCI_CLI_KEY "$OCI_CLI_KEY"
+  elif [ "$OCI_CLI_KEY_FILE" ] && [ -f "$OCI_CLI_KEY_FILE" ]; then
+    _debug "Reading OCI_CLI_KEY value from: $OCI_CLI_KEY_FILE"
+    OCI_CLI_KEY=$(_base64 <"$OCI_CLI_KEY_FILE")
+    _saveaccountconf_mutable OCI_CLI_KEY "$OCI_CLI_KEY"
+  else
+    OCI_CLI_KEY=$(_readaccountconf_mutable OCI_CLI_KEY)
   fi
 
   if [ -z "$OCI_CLI_KEY_FILE" ] && [ -z "$OCI_CLI_KEY" ]; then
@@ -159,7 +181,7 @@ _oci_config() {
   fi
 
   if [ "$(printf "%s\n" "$OCI_CLI_KEY" | wc -l)" -eq 1 ]; then
-    OCI_CLI_KEY=$(printf "%s" "$OCI_CLI_KEY" | _dbase64 multiline)
+    OCI_CLI_KEY=$(printf "%s" "$OCI_CLI_KEY" | _dbase64)
   fi
 
   return 0
@@ -177,7 +199,7 @@ _get_zone() {
   p=1
 
   while true; do
-    h=$(printf "%s" "$domain" | cut -d . -f $i-100)
+    h=$(printf "%s" "$domain" | cut -d . -f "$i"-100)
     _debug h "$h"
     if [ -z "$h" ]; then
       # not valid
@@ -186,7 +208,7 @@ _get_zone() {
 
     _domain_id=$(_signed_request "GET" "/20180115/zones/$h" "" "id")
     if [ "$_domain_id" ]; then
-      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-$p)
+      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-"$p")
       _domain=$h
 
       _debug _domain_id "$_domain_id"
@@ -265,6 +287,7 @@ _signed_request() {
     _response="$(_get "https://${_sig_host}${_sig_target}")"
   elif [ "$_curl_method" = "PATCH" ]; then
     export _H1="$_date_header"
+    # shellcheck disable=SC2090
     export _H2="$_sig_body_sha256"
     export _H3="$_sig_body_type"
     export _H4="$_sig_body_length"

@@ -169,7 +169,7 @@ _clean_email_header() {
 # email
 _email_has_display_name() {
   _email="$1"
-  expr "$_email" : '^.*[<>"]' >/dev/null
+  echo "$_email" | grep -q -E '^.*[<>"]'
 }
 
 ##
@@ -200,6 +200,7 @@ _smtp_send_curl() {
 
   set -- "$@" \
     --upload-file - \
+    --crlf \
     --mail-from "$SMTP_FROM" \
     --max-time "$SMTP_TIMEOUT"
 
@@ -249,7 +250,7 @@ _mime_encoded_word() {
   _text="$1"
   # (regex character ranges like [a-z] can be locale-dependent; enumerate ASCII chars to avoid that)
   _ascii='] $`"'"[!#%&'()*+,./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ~^_abcdefghijklmnopqrstuvwxyz{|}~-"
-  if expr "$_text" : "^.*[^$_ascii]" >/dev/null; then
+  if echo "$_text" | grep -q -E "^.*[^$_ascii]"; then
     # At least one non-ASCII char; convert entire thing to encoded word
     printf "%s" "=?UTF-8?B?$(printf "%s" "$_text" | _base64)?="
   else

@@ -1,10 +1,13 @@
 #!/usr/bin/env sh
-
-# hosting.de API
-
-# Values to export:
-# export HOSTINGDE_ENDPOINT='https://secure.hosting.de'
-# export HOSTINGDE_APIKEY='xxxxx'
+# shellcheck disable=SC2034
+dns_hostingde_info='Hosting.de
+Site: Hosting.de
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi#dns_hostingde
+Options:
+ HOSTINGDE_ENDPOINT Endpoint. E.g. "https://secure.hosting.de"
+ HOSTINGDE_APIKEY API Key
+Issues: github.com/acmesh-official/acme.sh/issues/2058
+'
 
 ########  Public functions #####################
 
@@ -36,6 +39,11 @@ _hostingde_apiKey() {
     _err "Please create your key and try again."
     return 1
   fi
+
+  # The endpoint is the base URL only; the api path is appended below.
+  # hosting.de's own docs show the full api URL, so strip it if pasted in.
+  # https://github.com/acmesh-official/acme.sh/issues/6896
+  HOSTINGDE_ENDPOINT="$(echo "$HOSTINGDE_ENDPOINT" | sed 's|/api/dns/v1/json||; s|/*$||')"
 
   _saveaccountconf_mutable HOSTINGDE_APIKEY "$HOSTINGDE_APIKEY"
   _saveaccountconf_mutable HOSTINGDE_ENDPOINT "$HOSTINGDE_ENDPOINT"

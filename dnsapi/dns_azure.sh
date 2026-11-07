@@ -1,65 +1,115 @@
 #!/usr/bin/env sh
+# shellcheck disable=SC2034
+dns_azure_info='Azure
+Site: Azure.microsoft.com
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi#dns_azure
+Options:
+ AZUREDNS_SUBSCRIPTIONID Subscription ID
+ AZUREDNS_TENANTID Tenant ID
+ AZUREDNS_APPID App ID. App ID of the service principal
+ AZUREDNS_CLIENTSECRET Client Secret. Secret from creating the service principal
+ AZUREDNS_MANAGEDIDENTITY Use Managed Identity. Use Managed Identity assigned to a resource instead of a service principal. "true"/"false"
+ AZUREDNS_BEARERTOKEN Bearer Token. Used instead of service principal credentials or managed identity. Not saved, provide it on every run. Optional.
+ AZUREDNS_PRIVATEZONE Use Azure Private DNS Zones instead of Public DNS Zones. "true"/"false"
+'
 
-WIKI="https://github.com/acmesh-official/acme.sh/wiki/How-to-use-Azure-DNS"
+wiki=https://github.com/acmesh-official/acme.sh/wiki/How-to-use-Azure-DNS
 
 ########  Public functions #####################
 
 # Usage: add  _acme-challenge.www.domain.com   "XKrxpRBosdIKFzxW_CT3KLZNf6q0HG9i01zxXp5CPBs"
 # Used to add txt record
 #
-# Ref: https://docs.microsoft.com/en-us/rest/api/dns/recordsets/createorupdate
+# Ref: https://learn.microsoft.com/en-us/rest/api/dns/record-sets/create-or-update?view=rest-dns-2018-05-01&tabs=HTTP
 #
+
 dns_azure_add() {
   fulldomain=$1
   txtvalue=$2
 
   AZUREDNS_SUBSCRIPTIONID="${AZUREDNS_SUBSCRIPTIONID:-$(_readaccountconf_mutable AZUREDNS_SUBSCRIPTIONID)}"
-  AZUREDNS_TENANTID="${AZUREDNS_TENANTID:-$(_readaccountconf_mutable AZUREDNS_TENANTID)}"
-  AZUREDNS_APPID="${AZUREDNS_APPID:-$(_readaccountconf_mutable AZUREDNS_APPID)}"
-  AZUREDNS_CLIENTSECRET="${AZUREDNS_CLIENTSECRET:-$(_readaccountconf_mutable AZUREDNS_CLIENTSECRET)}"
-
   if [ -z "$AZUREDNS_SUBSCRIPTIONID" ]; then
     AZUREDNS_SUBSCRIPTIONID=""
     AZUREDNS_TENANTID=""
     AZUREDNS_APPID=""
     AZUREDNS_CLIENTSECRET=""
-    _err "You didn't specify the Azure Subscription ID "
+    AZUREDNS_BEARERTOKEN=""
+    _err "You didn't specify the Azure Subscription ID"
     return 1
   fi
-
-  if [ -z "$AZUREDNS_TENANTID" ]; then
-    AZUREDNS_SUBSCRIPTIONID=""
-    AZUREDNS_TENANTID=""
-    AZUREDNS_APPID=""
-    AZUREDNS_CLIENTSECRET=""
-    _err "You didn't specify the Azure Tenant ID "
-    return 1
-  fi
-
-  if [ -z "$AZUREDNS_APPID" ]; then
-    AZUREDNS_SUBSCRIPTIONID=""
-    AZUREDNS_TENANTID=""
-    AZUREDNS_APPID=""
-    AZUREDNS_CLIENTSECRET=""
-    _err "You didn't specify the Azure App ID"
-    return 1
-  fi
-
-  if [ -z "$AZUREDNS_CLIENTSECRET" ]; then
-    AZUREDNS_SUBSCRIPTIONID=""
-    AZUREDNS_TENANTID=""
-    AZUREDNS_APPID=""
-    AZUREDNS_CLIENTSECRET=""
-    _err "You didn't specify the Azure Client Secret"
-    return 1
-  fi
-  #save account details to account conf file.
+  #save subscription id to account conf file.
   _saveaccountconf_mutable AZUREDNS_SUBSCRIPTIONID "$AZUREDNS_SUBSCRIPTIONID"
-  _saveaccountconf_mutable AZUREDNS_TENANTID "$AZUREDNS_TENANTID"
-  _saveaccountconf_mutable AZUREDNS_APPID "$AZUREDNS_APPID"
-  _saveaccountconf_mutable AZUREDNS_CLIENTSECRET "$AZUREDNS_CLIENTSECRET"
 
-  accesstoken=$(_azure_getaccess_token "$AZUREDNS_TENANTID" "$AZUREDNS_APPID" "$AZUREDNS_CLIENTSECRET")
+  AZUREDNS_PRIVATEZONE="${AZUREDNS_PRIVATEZONE:-$(_readaccountconf_mutable AZUREDNS_PRIVATEZONE)}"
+  if [ -n "$AZUREDNS_PRIVATEZONE" ]; then
+    #save public/private dns to account conf file.
+    _saveaccountconf_mutable AZUREDNS_PRIVATEZONE "$AZUREDNS_PRIVATEZONE"
+  fi
+
+  AZUREDNS_MANAGEDIDENTITY="${AZUREDNS_MANAGEDIDENTITY:-$(_readaccountconf_mutable AZUREDNS_MANAGEDIDENTITY)}"
+  if [ "$AZUREDNS_MANAGEDIDENTITY" = true ]; then
+    _info "Using Azure managed identity"
+    #save managed identity as preferred authentication method, clear service principal credentials from conf file.
+    _saveaccountconf_mutable AZUREDNS_MANAGEDIDENTITY "$AZUREDNS_MANAGEDIDENTITY"
+    _saveaccountconf_mutable AZUREDNS_TENANTID ""
+    _saveaccountconf_mutable AZUREDNS_APPID ""
+    _saveaccountconf_mutable AZUREDNS_CLIENTSECRET ""
+    _clearaccountconf_mutable AZUREDNS_BEARERTOKEN
+  else
+    _info "You didn't ask to use Azure managed identity, checking service principal credentials or provided bearer token"
+    AZUREDNS_TENANTID="${AZUREDNS_TENANTID:-$(_readaccountconf_mutable AZUREDNS_TENANTID)}"
+    AZUREDNS_APPID="${AZUREDNS_APPID:-$(_readaccountconf_mutable AZUREDNS_APPID)}"
+    AZUREDNS_CLIENTSECRET="${AZUREDNS_CLIENTSECRET:-$(_readaccountconf_mutable AZUREDNS_CLIENTSECRET)}"
+    #AZUREDNS_BEARERTOKEN is short-lived, so it is taken from the environment only and never
+    #read from or saved to the account conf. Versions up to 3.0.9 cached their internal access
+    #token under the same name, which must not be replayed as a user token (#7218).
+    if [ -z "$AZUREDNS_BEARERTOKEN" ]; then
+      if [ -z "$AZUREDNS_TENANTID" ]; then
+        AZUREDNS_SUBSCRIPTIONID=""
+        AZUREDNS_TENANTID=""
+        AZUREDNS_APPID=""
+        AZUREDNS_CLIENTSECRET=""
+        AZUREDNS_BEARERTOKEN=""
+        _err "You didn't specify the Azure Tenant ID "
+        return 1
+      fi
+
+      if [ -z "$AZUREDNS_APPID" ]; then
+        AZUREDNS_SUBSCRIPTIONID=""
+        AZUREDNS_TENANTID=""
+        AZUREDNS_APPID=""
+        AZUREDNS_CLIENTSECRET=""
+        AZUREDNS_BEARERTOKEN=""
+        _err "You didn't specify the Azure App ID"
+        return 1
+      fi
+
+      if [ -z "$AZUREDNS_CLIENTSECRET" ]; then
+        AZUREDNS_SUBSCRIPTIONID=""
+        AZUREDNS_TENANTID=""
+        AZUREDNS_APPID=""
+        AZUREDNS_CLIENTSECRET=""
+        AZUREDNS_BEARERTOKEN=""
+        _err "You didn't specify the Azure Client Secret"
+        return 1
+      fi
+    else
+      _info "Using provided bearer token"
+    fi
+
+    #save account details to account conf file, don't opt in for azure manages identity check.
+    _saveaccountconf_mutable AZUREDNS_MANAGEDIDENTITY "false"
+    _saveaccountconf_mutable AZUREDNS_TENANTID "$AZUREDNS_TENANTID"
+    _saveaccountconf_mutable AZUREDNS_APPID "$AZUREDNS_APPID"
+    _saveaccountconf_mutable AZUREDNS_CLIENTSECRET "$AZUREDNS_CLIENTSECRET"
+    _clearaccountconf_mutable AZUREDNS_BEARERTOKEN
+  fi
+
+  if [ -z "$AZUREDNS_BEARERTOKEN" ]; then
+    accesstoken=$(_azure_getaccess_token "$AZUREDNS_MANAGEDIDENTITY" "$AZUREDNS_TENANTID" "$AZUREDNS_APPID" "$AZUREDNS_CLIENTSECRET")
+  else
+    accesstoken=$(echo "$AZUREDNS_BEARERTOKEN" | sed "s/Bearer //g")
+  fi
 
   if ! _get_root "$fulldomain" "$AZUREDNS_SUBSCRIPTIONID" "$accesstoken"; then
     _err "invalid domain"
@@ -69,7 +119,9 @@ dns_azure_add() {
   _debug _sub_domain "$_sub_domain"
   _debug _domain "$_domain"
 
-  acmeRecordURI="https://management.azure.com$(printf '%s' "$_domain_id" | sed 's/\\//g')/TXT/$_sub_domain?api-version=2017-09-01"
+  _azure_set_zone_vars
+
+  acmeRecordURI="https://management.azure.com$(printf '%s' "$_domain_id" | sed 's/\\//g')/TXT/$_sub_domain?api-version=$_azure_api_version"
   _debug "$acmeRecordURI"
   # Get existing TXT record
   _azure_rest GET "$acmeRecordURI" "" "$accesstoken"
@@ -95,7 +147,7 @@ dns_azure_add() {
     fi
   fi
   # Add the txtvalue TXT Record
-  body="{\"properties\":{\"metadata\":{\"acmetscheck\":\"$timestamp\"},\"TTL\":10, \"TXTRecords\":[$values]}}"
+  body="{\"properties\":{\"metadata\":{\"acmetscheck\":\"$timestamp\"},\"$_azure_ttl_key\":10, \"$_azure_txt_key\":[$values]}}"
   _azure_rest PUT "$acmeRecordURI" "$body" "$accesstoken"
   if [ "$_code" = "200" ] || [ "$_code" = '201' ]; then
     _info "validation value added"
@@ -109,54 +161,74 @@ dns_azure_add() {
 # Usage: fulldomain txtvalue
 # Used to remove the txt record after validation
 #
-# Ref: https://docs.microsoft.com/en-us/rest/api/dns/recordsets/delete
+# Ref: https://learn.microsoft.com/en-us/rest/api/dns/record-sets/delete?view=rest-dns-2018-05-01&tabs=HTTP
 #
 dns_azure_rm() {
   fulldomain=$1
   txtvalue=$2
 
   AZUREDNS_SUBSCRIPTIONID="${AZUREDNS_SUBSCRIPTIONID:-$(_readaccountconf_mutable AZUREDNS_SUBSCRIPTIONID)}"
-  AZUREDNS_TENANTID="${AZUREDNS_TENANTID:-$(_readaccountconf_mutable AZUREDNS_TENANTID)}"
-  AZUREDNS_APPID="${AZUREDNS_APPID:-$(_readaccountconf_mutable AZUREDNS_APPID)}"
-  AZUREDNS_CLIENTSECRET="${AZUREDNS_CLIENTSECRET:-$(_readaccountconf_mutable AZUREDNS_CLIENTSECRET)}"
-
   if [ -z "$AZUREDNS_SUBSCRIPTIONID" ]; then
     AZUREDNS_SUBSCRIPTIONID=""
     AZUREDNS_TENANTID=""
     AZUREDNS_APPID=""
     AZUREDNS_CLIENTSECRET=""
+    AZUREDNS_BEARERTOKEN=""
     _err "You didn't specify the Azure Subscription ID "
     return 1
   fi
 
-  if [ -z "$AZUREDNS_TENANTID" ]; then
-    AZUREDNS_SUBSCRIPTIONID=""
-    AZUREDNS_TENANTID=""
-    AZUREDNS_APPID=""
-    AZUREDNS_CLIENTSECRET=""
-    _err "You didn't specify the Azure Tenant ID "
-    return 1
+  AZUREDNS_PRIVATEZONE="${AZUREDNS_PRIVATEZONE:-$(_readaccountconf_mutable AZUREDNS_PRIVATEZONE)}"
+
+  AZUREDNS_MANAGEDIDENTITY="${AZUREDNS_MANAGEDIDENTITY:-$(_readaccountconf_mutable AZUREDNS_MANAGEDIDENTITY)}"
+  if [ "$AZUREDNS_MANAGEDIDENTITY" = true ]; then
+    _info "Using Azure managed identity"
+  else
+    _info "You didn't ask to use Azure managed identity, checking service principal credentials or provided bearer token"
+    AZUREDNS_TENANTID="${AZUREDNS_TENANTID:-$(_readaccountconf_mutable AZUREDNS_TENANTID)}"
+    AZUREDNS_APPID="${AZUREDNS_APPID:-$(_readaccountconf_mutable AZUREDNS_APPID)}"
+    AZUREDNS_CLIENTSECRET="${AZUREDNS_CLIENTSECRET:-$(_readaccountconf_mutable AZUREDNS_CLIENTSECRET)}"
+    #AZUREDNS_BEARERTOKEN comes from the environment only, see the note in dns_azure_add
+    if [ -z "$AZUREDNS_BEARERTOKEN" ]; then
+      if [ -z "$AZUREDNS_TENANTID" ]; then
+        AZUREDNS_SUBSCRIPTIONID=""
+        AZUREDNS_TENANTID=""
+        AZUREDNS_APPID=""
+        AZUREDNS_CLIENTSECRET=""
+        AZUREDNS_BEARERTOKEN=""
+        _err "You didn't specify the Azure Tenant ID "
+        return 1
+      fi
+
+      if [ -z "$AZUREDNS_APPID" ]; then
+        AZUREDNS_SUBSCRIPTIONID=""
+        AZUREDNS_TENANTID=""
+        AZUREDNS_APPID=""
+        AZUREDNS_CLIENTSECRET=""
+        AZUREDNS_BEARERTOKEN=""
+        _err "You didn't specify the Azure App ID"
+        return 1
+      fi
+
+      if [ -z "$AZUREDNS_CLIENTSECRET" ]; then
+        AZUREDNS_SUBSCRIPTIONID=""
+        AZUREDNS_TENANTID=""
+        AZUREDNS_APPID=""
+        AZUREDNS_CLIENTSECRET=""
+        AZUREDNS_BEARERTOKEN=""
+        _err "You didn't specify the Azure Client Secret"
+        return 1
+      fi
+    else
+      _info "Using provided bearer token"
+    fi
   fi
 
-  if [ -z "$AZUREDNS_APPID" ]; then
-    AZUREDNS_SUBSCRIPTIONID=""
-    AZUREDNS_TENANTID=""
-    AZUREDNS_APPID=""
-    AZUREDNS_CLIENTSECRET=""
-    _err "You didn't specify the Azure App ID"
-    return 1
+  if [ -z "$AZUREDNS_BEARERTOKEN" ]; then
+    accesstoken=$(_azure_getaccess_token "$AZUREDNS_MANAGEDIDENTITY" "$AZUREDNS_TENANTID" "$AZUREDNS_APPID" "$AZUREDNS_CLIENTSECRET")
+  else
+    accesstoken=$(echo "$AZUREDNS_BEARERTOKEN" | sed "s/Bearer //g")
   fi
-
-  if [ -z "$AZUREDNS_CLIENTSECRET" ]; then
-    AZUREDNS_SUBSCRIPTIONID=""
-    AZUREDNS_TENANTID=""
-    AZUREDNS_APPID=""
-    AZUREDNS_CLIENTSECRET=""
-    _err "You didn't specify the Azure Client Secret"
-    return 1
-  fi
-
-  accesstoken=$(_azure_getaccess_token "$AZUREDNS_TENANTID" "$AZUREDNS_APPID" "$AZUREDNS_CLIENTSECRET")
 
   if ! _get_root "$fulldomain" "$AZUREDNS_SUBSCRIPTIONID" "$accesstoken"; then
     _err "invalid domain"
@@ -166,8 +238,11 @@ dns_azure_rm() {
   _debug _sub_domain "$_sub_domain"
   _debug _domain "$_domain"
 
-  acmeRecordURI="https://management.azure.com$(printf '%s' "$_domain_id" | sed 's/\\//g')/TXT/$_sub_domain?api-version=2017-09-01"
+  _azure_set_zone_vars
+
+  acmeRecordURI="https://management.azure.com$(printf '%s' "$_domain_id" | sed 's/\\//g')/TXT/$_sub_domain?api-version=$_azure_api_version"
   _debug "$acmeRecordURI"
+
   # Get existing TXT record
   _azure_rest GET "$acmeRecordURI" "" "$accesstoken"
   timestamp="$(_time)"
@@ -191,7 +266,7 @@ dns_azure_rm() {
       fi
     else
       # Remove only txtvalue from the TXT Record
-      body="{\"properties\":{\"metadata\":{\"acmetscheck\":\"$timestamp\"},\"TTL\":10, \"TXTRecords\":[$values]}}"
+      body="{\"properties\":{\"metadata\":{\"acmetscheck\":\"$timestamp\"},\"$_azure_ttl_key\":10, \"$_azure_txt_key\":[$values]}}"
       _azure_rest PUT "$acmeRecordURI" "$body" "$accesstoken"
       if [ "$_code" = "200" ] || [ "$_code" = '201' ]; then
         _info "validation value removed"
@@ -235,10 +310,10 @@ _azure_rest() {
     if [ "$_code" = "401" ]; then
       # we have an invalid access token set to expired
       _saveaccountconf_mutable AZUREDNS_TOKENVALIDTO "0"
-      _err "access denied make sure your Azure settings are correct. See $WIKI"
+      _err "Access denied. Invalid access token. Make sure your Azure settings are correct. See: $wiki"
       return 1
     fi
-    # See https://docs.microsoft.com/en-us/azure/architecture/best-practices/retry-service-specific#general-rest-and-retry-guidelines for retryable HTTP codes
+    # See https://learn.microsoft.com/en-us/azure/architecture/best-practices/retry-service-specific#general-rest-and-retry-guidelines for retryable HTTP codes
     if [ "$_ret" != "0" ] || [ -z "$_code" ] || [ "$_code" = "408" ] || [ "$_code" = "500" ] || [ "$_code" = "503" ] || [ "$_code" = "504" ]; then
       _request_retry_times="$(_math "$_request_retry_times" + 1)"
       _info "REST call error $_code retrying $ep in $_request_retry_times s"
@@ -256,13 +331,14 @@ _azure_rest() {
   return 0
 }
 
-## Ref: https://docs.microsoft.com/en-us/azure/active-directory/develop/active-directory-protocols-oauth-service-to-service#request-an-access-token
+## Ref: https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow#request-an-access-token
 _azure_getaccess_token() {
-  tenantID=$1
-  clientID=$2
-  clientSecret=$3
+  managedIdentity=$1
+  tenantID=$2
+  clientID=$3
+  clientSecret=$4
 
-  accesstoken="${AZUREDNS_BEARERTOKEN:-$(_readaccountconf_mutable AZUREDNS_BEARERTOKEN)}"
+  accesstoken="${AZUREDNS_ACCESSTOKEN:-$(_readaccountconf_mutable AZUREDNS_ACCESSTOKEN)}"
   expires_on="${AZUREDNS_TOKENVALIDTO:-$(_readaccountconf_mutable AZUREDNS_TOKENVALIDTO)}"
 
   # can we reuse the bearer token?
@@ -278,30 +354,62 @@ _azure_getaccess_token() {
   fi
   _debug "getting new bearer token"
 
-  export _H1="accept: application/json"
-  export _H2="Content-Type: application/x-www-form-urlencoded"
+  if [ "$managedIdentity" = true ]; then
+    # https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http
+    if [ -n "$IDENTITY_ENDPOINT" ]; then
+      # Some Azure environments may set IDENTITY_ENDPOINT (formerly MSI_ENDPOINT) to have an alternative metadata endpoint
+      url="$IDENTITY_ENDPOINT?api-version=2019-08-01&resource=https://management.azure.com/"
+      headers="X-IDENTITY-HEADER: $IDENTITY_HEADER"
+    else
+      url="http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/"
+      headers="Metadata: true"
+    fi
 
-  body="resource=$(printf "%s" 'https://management.core.windows.net/' | _url_encode)&client_id=$(printf "%s" "$clientID" | _url_encode)&client_secret=$(printf "%s" "$clientSecret" | _url_encode)&grant_type=client_credentials"
-  _secure_debug2 "data $body"
-  response="$(_post "$body" "https://login.microsoftonline.com/$tenantID/oauth2/token" "" "POST")"
-  _ret="$?"
-  _secure_debug2 "response $response"
-  response="$(echo "$response" | _normalizeJson)"
-  accesstoken=$(echo "$response" | _egrep_o "\"access_token\":\"[^\"]*\"" | _head_n 1 | cut -d : -f 2 | tr -d \")
-  expires_on=$(echo "$response" | _egrep_o "\"expires_on\":\"[^\"]*\"" | _head_n 1 | cut -d : -f 2 | tr -d \")
+    export _H1="$headers"
+    response="$(_get "$url")"
+    response="$(echo "$response" | _normalizeJson)"
+    accesstoken=$(echo "$response" | _egrep_o "\"access_token\":\"[^\"]*\"" | _head_n 1 | cut -d : -f 2 | tr -d \")
+    expires_on=$(echo "$response" | _egrep_o "\"expires_on\":\"[^\"]*\"" | _head_n 1 | cut -d : -f 2 | tr -d \")
+  else
+    export _H1="accept: application/json"
+    export _H2="Content-Type: application/x-www-form-urlencoded"
+    body="resource=$(printf "%s" 'https://management.core.windows.net/' | _url_encode)&client_id=$(printf "%s" "$clientID" | _url_encode)&client_secret=$(printf "%s" "$clientSecret" | _url_encode)&grant_type=client_credentials"
+    _secure_debug2 "data $body"
+    response="$(_post "$body" "https://login.microsoftonline.com/$tenantID/oauth2/token" "" "POST")"
+    _ret="$?"
+    _secure_debug2 "response $response"
+    response="$(echo "$response" | _normalizeJson)"
+    accesstoken=$(echo "$response" | _egrep_o "\"access_token\":\"[^\"]*\"" | _head_n 1 | cut -d : -f 2 | tr -d \")
+    expires_on=$(echo "$response" | _egrep_o "\"expires_on\":\"[^\"]*\"" | _head_n 1 | cut -d : -f 2 | tr -d \")
+  fi
 
   if [ -z "$accesstoken" ]; then
-    _err "no acccess token received. Check your Azure settings see $WIKI"
+    _err "No acccess token received. Check your Azure settings. See: $wiki"
     return 1
   fi
   if [ "$_ret" != "0" ]; then
     _err "error $response"
     return 1
   fi
-  _saveaccountconf_mutable AZUREDNS_BEARERTOKEN "$accesstoken"
+  _saveaccountconf_mutable AZUREDNS_ACCESSTOKEN "$accesstoken"
   _saveaccountconf_mutable AZUREDNS_TOKENVALIDTO "$expires_on"
   printf "%s" "$accesstoken"
   return 0
+}
+
+_azure_set_zone_vars() {
+  if [ "$AZUREDNS_PRIVATEZONE" = "true" ]; then
+    _azure_zone_type="privateDnsZones"
+    _azure_api_version="2024-06-01"
+    _azure_ttl_key="ttl"
+    _azure_txt_key="txtRecords"
+    _debug "Querying private DNS zone"
+  else
+    _azure_zone_type="dnszones"
+    _azure_api_version="2017-09-01"
+    _azure_ttl_key="TTL"
+    _azure_txt_key="TXTRecords"
+  fi
 }
 
 _get_root() {
@@ -311,15 +419,20 @@ _get_root() {
   i=1
   p=1
 
-  ## Ref: https://docs.microsoft.com/en-us/rest/api/dns/zones/list
-  ## returns up to 100 zones in one response therefore handling more results is not not implemented
-  ## (ZoneListResult with  continuation token for the next page of results)
-  ## Per https://docs.microsoft.com/en-us/azure/azure-subscription-service-limits#dns-limits you are limited to 100 Zone/subscriptions anyways
+  _azure_set_zone_vars
+
+  ## Ref: https://learn.microsoft.com/en-us/rest/api/dns/zones/list?view=rest-dns-2018-05-01&tabs=HTTP
+  ## returns up to 100 zones in one response. Handling more results is not implemented
+  ## (ZoneListResult with continuation token for the next page of results)
   ##
-  _azure_rest GET "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.Network/dnszones?\$top=500&api-version=2017-09-01" "" "$accesstoken"
+  ## TODO: handle more than 100 results, as per:
+  ## https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-dns-limits
+  ## The new limit is 250 Public DNS zones per subscription, while the old limit was only 100
+  ##
+  _azure_rest GET "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.Network/$_azure_zone_type?\$top=500&api-version=$_azure_api_version" "" "$accesstoken"
   # Find matching domain name in Json response
   while true; do
-    h=$(printf "%s" "$domain" | cut -d . -f $i-100)
+    h=$(printf "%s" "$domain" | cut -d . -f "$i"-100)
     _debug2 "Checking domain: $h"
     if [ -z "$h" ]; then
       #not valid
@@ -334,7 +447,7 @@ _get_root() {
           #create the record at the domain apex (@) if only the domain name was provided as --domain-alias
           _sub_domain="@"
         else
-          _sub_domain=$(echo "$domain" | cut -d . -f 1-$p)
+          _sub_domain=$(echo "$domain" | cut -d . -f 1-"$p")
         fi
         _domain=$h
         return 0

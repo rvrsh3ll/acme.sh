@@ -1,14 +1,17 @@
 #!/usr/bin/env sh
+# shellcheck disable=SC2034
+dns_easydns_info='easyDNS.net
+Site: easyDNS.net
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi2#dns_easydns
+Options:
+ EASYDNS_Token API Token
+ EASYDNS_Key API Key
+Issues: github.com/acmesh-official/acme.sh/issues/2647
+Author: @Neilpang, wurzelpanzer <wurzelpanzer@maximolider.net>
+'
 
-#######################################################
-#
-# easyDNS REST API for acme.sh by Neilpang based on dns_cf.sh
-#
 # API Documentation: https://sandbox.rest.easydns.net:3001/
-#
-# Author: wurzelpanzer [wurzelpanzer@maximolider.net]
-# Report Bugs here: https://github.com/acmesh-official/acme.sh/issues/2647
-#
+
 ####################  Public functions #################
 
 #EASYDNS_Key="xxxxxxxxxxxxxxxxxxxxxxxx"
@@ -72,6 +75,11 @@ dns_easydns_rm() {
   EASYDNS_Token="${EASYDNS_Token:-$(_readaccountconf_mutable EASYDNS_Token)}"
   EASYDNS_Key="${EASYDNS_Key:-$(_readaccountconf_mutable EASYDNS_Key)}"
 
+  if [ -z "$EASYDNS_Token" ] || [ -z "$EASYDNS_Key" ]; then
+    _err "You didn't specify an easydns.net token or api key. Signup at https://cp.easydns.com/manage/security/api/signup.php"
+    return 1
+  fi
+
   _debug "First detect the root zone"
   if ! _get_root "$fulldomain"; then
     _err "invalid domain"
@@ -88,23 +96,20 @@ dns_easydns_rm() {
     return 1
   fi
 
-  count=$(printf "%s\n" "$response" | _egrep_o "\"count\":[^,]*" | cut -d : -f 2)
-  _debug count "$count"
-  if [ "$count" = "0" ]; then
+  record_id=$(printf "%s\n" "$response" | tr '{' '\n' | grep "\"rdata\":\"$txtvalue\"" | _egrep_o "\"id\":\"[^\"]*\"" | cut -d : -f 2 | tr -d \")
+  _debug "record_id" "$record_id"
+
+  if [ -z "$record_id" ]; then
     _info "Don't need to remove."
-  else
-    record_id=$(printf "%s\n" "$response" | _egrep_o "\"id\":\"[^\"]*\"" | cut -d : -f 2 | tr -d \" | head -n 1)
-    _debug "record_id" "$record_id"
-    if [ -z "$record_id" ]; then
-      _err "Can not get record id to remove."
-      return 1
-    fi
-    if ! _EASYDNS_rest DELETE "zones/records/$_domain/$record_id"; then
-      _err "Delete record error."
-      return 1
-    fi
-    _contains "$response" "\"status\":200"
+    return 0
   fi
+
+  if ! _EASYDNS_rest DELETE "zones/records/$_domain/$record_id"; then
+    _err "Delete record error."
+    return 1
+  fi
+
+  _contains "$response" "\"status\":200"
 
 }
 
@@ -118,7 +123,7 @@ _get_root() {
   i=1
   p=1
   while true; do
-    h=$(printf "%s" "$domain" | cut -d . -f $i-100)
+    h=$(printf "%s" "$domain" | cut -d . -f "$i"-100)
     _debug h "$h"
     if [ -z "$h" ]; then
       #not valid
@@ -130,7 +135,7 @@ _get_root() {
     fi
 
     if _contains "$response" "\"status\":200"; then
-      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-$p)
+      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-"$p")
       _domain=$h
       return 0
     fi

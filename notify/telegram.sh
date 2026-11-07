@@ -4,6 +4,11 @@
 
 #TELEGRAM_BOT_APITOKEN=""
 #TELEGRAM_BOT_CHATID=""
+#TELEGRAM_BOT_URLBASE=""
+#TELEGRAM_BOT_THREADID=""
+
+# To get TELEGRAM_BOT_THREADID, just copy the link of the message from the thread.
+# https://t.me/c/123456789/XXX/1520 - XXX is the TELEGRAM_BOT_THREADID
 
 telegram_send() {
   _subject="$1"
@@ -27,17 +32,33 @@ telegram_send() {
   fi
   _saveaccountconf_mutable TELEGRAM_BOT_CHATID "$TELEGRAM_BOT_CHATID"
 
-  _content="$(printf "%s" "$_content" | sed -e 's/\([_*`\[]\)/\\\\\1/g')"
+  TELEGRAM_BOT_THREADID="${TELEGRAM_BOT_THREADID:-$(_readaccountconf_mutable TELEGRAM_BOT_THREADID)}"
+  if [ -z "$TELEGRAM_BOT_THREADID" ]; then
+    TELEGRAM_BOT_THREADID=""
+  fi
+  _saveaccountconf_mutable TELEGRAM_BOT_THREADID "$TELEGRAM_BOT_THREADID"
+
+  TELEGRAM_BOT_URLBASE="${TELEGRAM_BOT_URLBASE:-$(_readaccountconf_mutable TELEGRAM_BOT_URLBASE)}"
+  if [ -z "$TELEGRAM_BOT_URLBASE" ]; then
+    TELEGRAM_BOT_URLBASE="https://api.telegram.org"
+  fi
+  _saveaccountconf_mutable TELEGRAM_BOT_URLBASE "$TELEGRAM_BOT_URLBASE"
+
+  _subject="$(printf "%s" "$_subject" | sed -E 's/([][()~`>#+=|{}.!*_\\-])/\\\\\1/g')"
+  _content="$(printf "%s" "$_content" | sed -E 's/([][()~`>#+=|{}.!*_\\-])/\\\\\1/g')"
   _content="$(printf "*%s*\n%s" "$_subject" "$_content" | _json_encode)"
   _data="{\"text\": \"$_content\", "
   _data="$_data\"chat_id\": \"$TELEGRAM_BOT_CHATID\", "
-  _data="$_data\"parse_mode\": \"markdown\", "
+  if [ -n "$TELEGRAM_BOT_THREADID" ]; then
+    _data="$_data\"message_thread_id\": \"$TELEGRAM_BOT_THREADID\", "
+  fi
+  _data="$_data\"parse_mode\": \"MarkdownV2\", "
   _data="$_data\"disable_web_page_preview\": \"1\"}"
 
   _debug "$_data"
 
   export _H1="Content-Type: application/json"
-  _telegram_bot_url="https://api.telegram.org/bot${TELEGRAM_BOT_APITOKEN}/sendMessage"
+  _telegram_bot_url="${TELEGRAM_BOT_URLBASE}/bot${TELEGRAM_BOT_APITOKEN}/sendMessage"
   if _post "$_data" "$_telegram_bot_url" >/dev/null; then
     # shellcheck disable=SC2154
     _message=$(printf "%s\n" "$response" | sed -n 's/.*"ok":\([^,]*\).*/\1/p')

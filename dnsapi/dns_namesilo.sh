@@ -1,8 +1,14 @@
 #!/usr/bin/env sh
+# shellcheck disable=SC2034
+dns_namesilo_info='NameSilo.com
+Site: NameSilo.com
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi#dns_namesilo
+Options:
+ Namesilo_Key API Key
+Author: @meowthink
+'
 
-#Author: meowthink
-#Created 01/14/2017
-#Utilize namesilo.com API to finish dns-01 verifications.
+#Utilize API to finish dns-01 verifications.
 
 Namesilo_API="https://www.namesilo.com/api"
 
@@ -59,7 +65,7 @@ dns_namesilo_rm() {
   if _namesilo_rest GET "dnsListRecords?version=1&type=xml&key=$Namesilo_Key&domain=$_domain"; then
     retcode=$(printf "%s\n" "$response" | _egrep_o "<code>300")
     if [ "$retcode" ]; then
-      _record_id=$(echo "$response" | _egrep_o "<record_id>([^<]*)</record_id><type>TXT</type><host>$fulldomain</host>" | _egrep_o "<record_id>([^<]*)</record_id>" | sed -r "s/<record_id>([^<]*)<\/record_id>/\1/" | tail -n 1)
+      _record_id=$(echo "$response" | _egrep_o "<record_id>([^<]*)</record_id><type>TXT</type><host>$_sub_domain</host><value>$txtvalue</value>" | _egrep_o "<record_id>([^<]*)</record_id>" | sed -r "s/<record_id>([^<]*)<\/record_id>/\1/" | tail -n 1)
       _debug _record_id "$_record_id"
       if [ "$_record_id" ]; then
         _info "Successfully retrieved the record id for ACME challenge."
@@ -103,15 +109,15 @@ _get_root() {
 
   # Need to exclude the last field (tld)
   numfields=$(echo "$domain" | _egrep_o "\." | wc -l)
-  while [ $i -le "$numfields" ]; do
-    host=$(printf "%s" "$domain" | cut -d . -f $i-100)
+  while [ "$i" -le "$numfields" ]; do
+    host=$(printf "%s" "$domain" | cut -d . -f "$i"-100)
     _debug host "$host"
     if [ -z "$host" ]; then
       return 1
     fi
 
-    if _contains "$response" "<domain>$host"; then
-      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-$p)
+    if _contains "$response" ">$host</domain>"; then
+      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-"$p")
       _domain="$host"
       return 0
     fi

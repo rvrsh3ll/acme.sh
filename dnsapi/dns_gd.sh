@@ -1,10 +1,12 @@
 #!/usr/bin/env sh
-
-#Godaddy domain api
-#
-#GD_Key="sdfsdfsdfljlbjkljlkjsdfoiwje"
-#
-#GD_Secret="asdfsdfsfsdfsdfdfsdf"
+# shellcheck disable=SC2034
+dns_gd_info='GoDaddy.com
+Site: GoDaddy.com
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi#dns_gd
+Options:
+ GD_Key API Key
+ GD_Secret API Secret
+'
 
 GD_Api="https://api.godaddy.com/v1"
 
@@ -20,8 +22,8 @@ dns_gd_add() {
   if [ -z "$GD_Key" ] || [ -z "$GD_Secret" ]; then
     GD_Key=""
     GD_Secret=""
-    _err "You don't specify godaddy api key and secret yet."
-    _err "Please create you key and try again."
+    _err "You didn't specify godaddy api key and secret yet."
+    _err "Please create your key and try again."
     return 1
   fi
 
@@ -44,14 +46,15 @@ dns_gd_add() {
   fi
 
   if _contains "$response" "$txtvalue"; then
-    _info "The record is existing, skip"
+    _info "This record already exists, skipping"
     return 0
   fi
 
   _add_data="{\"data\":\"$txtvalue\"}"
   for t in $(echo "$response" | tr '{' "\n" | grep "\"name\":\"$_sub_domain\"" | tr ',' "\n" | grep '"data"' | cut -d : -f 2); do
     _debug2 t "$t"
-    if [ "$t" ]; then
+    # ignore empty (previously removed) records, to prevent useless _acme-challenge TXT entries
+    if [ "$t" ] && [ "$t" != '""' ]; then
       _add_data="$_add_data,{\"data\":$t}"
     fi
   done
@@ -59,13 +62,30 @@ dns_gd_add() {
 
   _info "Adding record"
   if _gd_rest PUT "domains/$_domain/records/TXT/$_sub_domain" "[$_add_data]"; then
-    _info "Added, sleeping 10 seconds"
-    _sleep 10
-    #todo: check if the record takes effect
-    return 0
+    _debug "Checking updated records of '${fulldomain}'"
+
+    if ! _gd_rest GET "domains/$_domain/records/TXT/$_sub_domain"; then
+      _err "Validating TXT record for '${fulldomain}' with rest error [$?]." "$response"
+      return 1
+    fi
+
+    if _contains "$response" "UNKNOWN_DOMAIN"; then
+      # GoDaddy sometimes returns UNKNOWN_DOMAIN when reading a record back even
+      # though the PUT above succeeded; skip the local readback check and let
+      # acme.sh's own DNS propagation check verify the record was published.
+      _info "GoDaddy API won't allow reading the record back; skipping local verification."
+    elif ! _contains "$response" "$txtvalue"; then
+      _err "TXT record '${txtvalue}' for '${fulldomain}', value wasn't set!"
+      return 1
+    fi
+  else
+    _err "Add txt record error, value '${txtvalue}' for '${fulldomain}' was not set."
+    return 1
   fi
-  _err "Add txt record error."
-  return 1
+
+  _sleep 10
+  _info "Added TXT record '${txtvalue}' for '${fulldomain}'."
+  return 0
 }
 
 #fulldomain
@@ -107,11 +127,20 @@ dns_gd_rm() {
     fi
   done
   if [ -z "$_add_data" ]; then
-    _add_data="{\"data\":\"\"}"
+    # delete empty record
+    _debug "Delete last record for '${fulldomain}'"
+    if ! _gd_rest DELETE "domains/$_domain/records/TXT/$_sub_domain"; then
+      _err "Cannot delete empty TXT record for '$fulldomain'"
+      return 1
+    fi
+  else
+    # remove specific TXT value, keeping other entries
+    _debug2 _add_data "$_add_data"
+    if ! _gd_rest PUT "domains/$_domain/records/TXT/$_sub_domain" "[$_add_data]"; then
+      _err "Cannot update TXT record for '$fulldomain'"
+      return 1
+    fi
   fi
-  _debug2 _add_data "$_add_data"
-
-  _gd_rest PUT "domains/$_domain/records/TXT/$_sub_domain" "[$_add_data]"
 }
 
 ####################  Private functions below ##################################
@@ -121,26 +150,50 @@ dns_gd_rm() {
 # _domain=domain.com
 _get_root() {
   domain=$1
-  i=2
-  p=1
+  i=1
+  p=0
   while true; do
-    h=$(printf "%s" "$domain" | cut -d . -f $i-100)
+    h=$(printf "%s" "$domain" | cut -d . -f "$i"-100)
     if [ -z "$h" ]; then
       #not valid
       return 1
     fi
 
-    if ! _gd_rest GET "domains/$h"; then
-      return 1
+    # The record name is whatever precedes the candidate zone. Do not assume
+    # _acme-challenge here: with DNS alias mode it can be any name, and the
+    # record may even sit at the zone apex (name "@").
+    if [ "$p" = "0" ]; then
+      _probe_sub="@"
+    else
+      _probe_sub=$(printf "%s" "$domain" | cut -d . -f 1-"$p")
     fi
 
-    if _contains "$response" '"code":"NOT_FOUND"'; then
-      _debug "$h not found"
-    else
-      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-$p)
+    # Probe with the records endpoint instead of "GET domains/$h": since
+    # 2024-05 GoDaddy rejects the domain details call for accounts with
+    # fewer than 10 domains, while record-level calls keep working.
+    # https://github.com/acmesh-official/acme.sh/issues/4487
+    if ! _gd_rest GET "domains/$h/records/TXT/$_probe_sub"; then
+      return 1
+    fi
+    if _startswith "$response" '\['; then
+      _sub_domain="$_probe_sub"
       _domain="$h"
       return 0
     fi
+
+    # Some accounts get UNKNOWN_DOMAIN when reading records of a valid zone
+    # even though writes succeed (see issue #6517); fall back to the domain
+    # details call for them.
+    if ! _gd_rest GET "domains/$h"; then
+      return 1
+    fi
+    if _contains "$response" '"domainId"'; then
+      _sub_domain="$_probe_sub"
+      _domain="$h"
+      return 0
+    fi
+
+    _debug "$h not found"
     p="$i"
     i=$(_math "$i" + 1)
   done
@@ -156,15 +209,15 @@ _gd_rest() {
   export _H1="Authorization: sso-key $GD_Key:$GD_Secret"
   export _H2="Content-Type: application/json"
 
-  if [ "$data" ]; then
-    _debug data "$data"
+  if [ "$data" ] || [ "$m" = "DELETE" ]; then
+    _debug "data ($m): " "$data"
     response="$(_post "$data" "$GD_Api/$ep" "" "$m")"
   else
     response="$(_get "$GD_Api/$ep")"
   fi
 
   if [ "$?" != "0" ]; then
-    _err "error $ep"
+    _err "error on rest call ($m): $ep"
     return 1
   fi
   _debug2 response "$response"

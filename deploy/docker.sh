@@ -3,6 +3,8 @@
 #DEPLOY_DOCKER_CONTAINER_LABEL="xxxxxxx"
 
 #DEPLOY_DOCKER_CONTAINER_KEY_FILE="/path/to/key.pem"
+#DEPLOY_DOCKER_CONTAINER_KEY_MODE="0640"
+#DEPLOY_DOCKER_CONTAINER_KEY_OWNER="1000:1000"
 #DEPLOY_DOCKER_CONTAINER_CERT_FILE="/path/to/cert.pem"
 #DEPLOY_DOCKER_CONTAINER_CA_FILE="/path/to/ca.pem"
 #DEPLOY_DOCKER_CONTAINER_FULLCHAIN_FILE="/path/to/fullchain.pem"
@@ -18,6 +20,7 @@ docker_deploy() {
   _ccert="$3"
   _cca="$4"
   _cfullchain="$5"
+  _cpfx="$6"
   _debug _cdomain "$_cdomain"
   _getdeployconf DEPLOY_DOCKER_CONTAINER_LABEL
   _debug2 DEPLOY_DOCKER_CONTAINER_LABEL "$DEPLOY_DOCKER_CONTAINER_LABEL"
@@ -70,6 +73,18 @@ docker_deploy() {
     _savedeployconf DEPLOY_DOCKER_CONTAINER_KEY_FILE "$DEPLOY_DOCKER_CONTAINER_KEY_FILE"
   fi
 
+  _getdeployconf DEPLOY_DOCKER_CONTAINER_KEY_MODE
+  _debug2 DEPLOY_DOCKER_CONTAINER_KEY_MODE "$DEPLOY_DOCKER_CONTAINER_KEY_MODE"
+  if [ "$DEPLOY_DOCKER_CONTAINER_KEY_MODE" ]; then
+    _savedeployconf DEPLOY_DOCKER_CONTAINER_KEY_MODE "$DEPLOY_DOCKER_CONTAINER_KEY_MODE"
+  fi
+
+  _getdeployconf DEPLOY_DOCKER_CONTAINER_KEY_OWNER
+  _debug2 DEPLOY_DOCKER_CONTAINER_KEY_OWNER "$DEPLOY_DOCKER_CONTAINER_KEY_OWNER"
+  if [ "$DEPLOY_DOCKER_CONTAINER_KEY_OWNER" ]; then
+    _savedeployconf DEPLOY_DOCKER_CONTAINER_KEY_OWNER "$DEPLOY_DOCKER_CONTAINER_KEY_OWNER"
+  fi
+
   _getdeployconf DEPLOY_DOCKER_CONTAINER_CERT_FILE
   _debug2 DEPLOY_DOCKER_CONTAINER_CERT_FILE "$DEPLOY_DOCKER_CONTAINER_CERT_FILE"
   if [ "$DEPLOY_DOCKER_CONTAINER_CERT_FILE" ]; then
@@ -86,6 +101,12 @@ docker_deploy() {
   _debug2 DEPLOY_DOCKER_CONTAINER_FULLCHAIN_FILE "$DEPLOY_DOCKER_CONTAINER_FULLCHAIN_FILE"
   if [ "$DEPLOY_DOCKER_CONTAINER_FULLCHAIN_FILE" ]; then
     _savedeployconf DEPLOY_DOCKER_CONTAINER_FULLCHAIN_FILE "$DEPLOY_DOCKER_CONTAINER_FULLCHAIN_FILE"
+  fi
+
+  _getdeployconf DEPLOY_DOCKER_CONTAINER_PFX_FILE
+  _debug2 DEPLOY_DOCKER_CONTAINER_PFX_FILE "$DEPLOY_DOCKER_CONTAINER_PFX_FILE"
+  if [ "$DEPLOY_DOCKER_CONTAINER_PFX_FILE" ]; then
+    _savedeployconf DEPLOY_DOCKER_CONTAINER_PFX_FILE "$DEPLOY_DOCKER_CONTAINER_PFX_FILE"
   fi
 
   _getdeployconf DEPLOY_DOCKER_CONTAINER_RELOAD_CMD
@@ -105,6 +126,20 @@ docker_deploy() {
     if ! _docker_cp "$_cid" "$_ckey" "$DEPLOY_DOCKER_CONTAINER_KEY_FILE"; then
       return 1
     fi
+    if [ "$DEPLOY_DOCKER_CONTAINER_KEY_OWNER" ]; then
+      _info "Setting key file owner to $DEPLOY_DOCKER_CONTAINER_KEY_OWNER"
+      if ! _docker_exec "$_cid" chown "$DEPLOY_DOCKER_CONTAINER_KEY_OWNER" "$DEPLOY_DOCKER_CONTAINER_KEY_FILE"; then
+        _err "Can not change owner of key file in container"
+        return 1
+      fi
+    fi
+    if [ "$DEPLOY_DOCKER_CONTAINER_KEY_MODE" ]; then
+      _info "Setting key file mode to $DEPLOY_DOCKER_CONTAINER_KEY_MODE"
+      if ! _docker_exec "$_cid" chmod "$DEPLOY_DOCKER_CONTAINER_KEY_MODE" "$DEPLOY_DOCKER_CONTAINER_KEY_FILE"; then
+        _err "Can not change mode of key file in container"
+        return 1
+      fi
+    fi
   fi
 
   if [ "$DEPLOY_DOCKER_CONTAINER_CERT_FILE" ]; then
@@ -121,6 +156,12 @@ docker_deploy() {
 
   if [ "$DEPLOY_DOCKER_CONTAINER_FULLCHAIN_FILE" ]; then
     if ! _docker_cp "$_cid" "$_cfullchain" "$DEPLOY_DOCKER_CONTAINER_FULLCHAIN_FILE"; then
+      return 1
+    fi
+  fi
+
+  if [ "$DEPLOY_DOCKER_CONTAINER_PFX_FILE" ]; then
+    if ! _docker_cp "$_cid" "$_cpfx" "$DEPLOY_DOCKER_CONTAINER_PFX_FILE"; then
       return 1
     fi
   fi
@@ -176,10 +217,22 @@ _docker_exec() {
     _debug2 cjson "$cjson"
     execid="$(echo "$cjson" | cut -d '"' -f 4)"
     _debug execid "$execid"
-    ejson="$(_curl_unix_sock "$_DOCKER_SOCK" POST "/exec/$execid/start" "{\"Detach\": false,\"Tty\": false}")"
+    #Detach:true is required for podman's docker-compatible API: with
+    #Detach:false it streams the command output on the connection, so the
+    #non-empty response was misread as an error (issue #4977). The real
+    #result is checked via the exec inspect ExitCode below instead.
+    ejson="$(_curl_unix_sock "$_DOCKER_SOCK" POST "/exec/$execid/start" "{\"Detach\": true,\"Tty\": false}")"
     _debug2 ejson "$ejson"
-    if [ "$ejson" ]; then
-      _err "$ejson"
+    _et=0
+    ijson="$(_curl_unix_sock "$_DOCKER_SOCK" GET "/exec/$execid/json")"
+    while _contains "$ijson" "\"Running\":true" && [ "$_et" -lt 10 ]; do
+      sleep 1
+      _et="$(_math "$_et" + 1)"
+      ijson="$(_curl_unix_sock "$_DOCKER_SOCK" GET "/exec/$execid/json")"
+    done
+    _debug2 ijson "$ijson"
+    if ! echo "$ijson" | _egrep_o "\"ExitCode\": *0[,}]" >/dev/null 2>&1; then
+      _err "docker exec error: $ijson"
       return 1
     fi
   else
@@ -273,16 +326,27 @@ _check_curl_version() {
   _minor="$(_getfield "$_cversion" 2 '.')"
   _debug2 "_minor" "$_minor"
 
-  if [ "$_major$_minor" -lt "740" ]; then
+  if [ "$_major" -ge "8" ]; then
+    #ok
+    return 0
+  fi
+  if [ "$_major" = "7" ]; then
+    if [ "$_minor" -lt "40" ]; then
+      _err "curl v$_cversion doesn't support unit socket"
+      _err "Please upgrade to curl 7.40 or later."
+      return 1
+    fi
+    if [ "$_minor" -lt "50" ]; then
+      _debug "Use short host name"
+      export _CURL_NO_HOST=1
+    else
+      export _CURL_NO_HOST=
+    fi
+    return 0
+  else
     _err "curl v$_cversion doesn't support unit socket"
     _err "Please upgrade to curl 7.40 or later."
     return 1
   fi
-  if [ "$_major$_minor" -lt "750" ]; then
-    _debug "Use short host name"
-    export _CURL_NO_HOST=1
-  else
-    export _CURL_NO_HOST=
-  fi
-  return 0
+
 }

@@ -1,9 +1,13 @@
 #!/usr/bin/env sh
-
-# bug reports to dev@1e.ca
-
-# ME_Key=qmlkdjflmkqdjf
-# ME_Secret=qmsdlkqmlksdvnnpae
+# shellcheck disable=SC2034
+dns_me_info='DnsMadeEasy.com
+Site: DnsMadeEasy.com
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi#dns_me
+Options:
+ ME_Key API Key
+ ME_Secret API Secret
+Author: <dev@1e.ca>
+'
 
 ME_Api=https://api.dnsmadeeasy.com/V2.0/dns/managed
 
@@ -49,6 +53,8 @@ dns_me_add() {
       _info "Added"
       #todo: check if the record takes effect
       return 0
+    elif printf -- "%s" "$response" | grep -q "already exists"; then
+      _info "Record already exists, skipping."
     else
       _err "Add txt record error."
       return 1
@@ -103,7 +109,7 @@ _get_root() {
   i=2
   p=1
   while true; do
-    h=$(printf "%s" "$domain" | cut -d . -f $i-100)
+    h=$(printf "%s" "$domain" | cut -d . -f "$i"-100)
     if [ -z "$h" ]; then
       #not valid
       return 1
@@ -116,7 +122,7 @@ _get_root() {
     if _contains "$response" "\"name\":\"$h\""; then
       _domain_id=$(printf "%s\n" "$response" | sed 's/^{//; s/}$//; s/{.*}//' | sed -r 's/^.*"id":([0-9]+).*$/\1/')
       if [ "$_domain_id" ]; then
-        _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-$p)
+        _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-"$p")
         _domain="$h"
         return 0
       fi
@@ -134,7 +140,7 @@ _me_rest() {
   data="$3"
   _debug "$ep"
 
-  cdate=$(LANG=C date -u +"%a, %d %b %Y %T %Z")
+  cdate=$(LC_ALL=C date -u +"%a, %d %b %Y %T %Z")
   hmac=$(printf "%s" "$cdate" | _hmac sha1 "$(printf "%s" "$ME_Secret" | _hex_dump | tr -d " ")" hex)
 
   export _H1="x-dnsme-apiKey: $ME_Key"
